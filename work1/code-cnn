@@ -1,0 +1,170 @@
+import os
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Embedding, Flatten, Dense, Conv2D, MaxPool2D
+from tensorflow.keras.layers import Conv1D, MaxPooling1D
+import numpy as np
+import tensorflow as tf
+import matplotlib.pyplot as plt
+imdb_dir = 'D:/PycharmProjects/nlp/glove/aclImdb'
+# ----------------------------------------------------------------------------------------------------------------
+# 读取测试集中的所有文本，并且将负面文本标记为0，正面标记为1.
+train_dir = os.path.join(imdb_dir, 'train')  # os.path.join : 拼接路径，会把所有参数拼接起来，中间自动加‘\’
+labels = []
+texts = []
+for label_type in ['neg', 'pos']:
+    dir_name = os.path.join(train_dir, label_type)
+    for fname in os.listdir(dir_name):  # os.listdir 会列出 参数目录下的全部文件名。
+        if fname[-4:] == '.txt':
+            f = open(os.path.join(dir_name, fname), encoding='UTF-8')
+            texts.append(f.read())
+            f.close()
+            if label_type == 'neg':
+                labels.append(0)
+            else:
+                labels.append(1)
+
+maxlen = 100  # 只关注前100个单词
+training_samples = 12000  # 在200个样本上训练
+validation_samples = 12000  # 在10000个样本上验证
+max_words = 10000   # 只考虑最常见的前10000个词
+
+# ----------------------------------------------------------------------------------------------------------------
+# 对text使用Tokenizer的一系列操作   ???  不是很懂
+tokenizer = Tokenizer(num_words=max_words)  # 只考虑最常见的前max_words个词
+tokenizer.fit_on_texts(texts)   # 使用一系列文档来生成token词典，texts为list类，每个元素为一个文档
+sequences = tokenizer.texts_to_sequences(texts)  # 将多个文档转换为word下标的向量形式,shape为[len(texts)，len(text)] -- (文档数，每条文档的长度)
+# print(sequences)
+word_index = tokenizer.word_index   # word_index 一个dict，保存所有word对应的编号id，从1开始
+print('Found %s unique tokens.' % len(word_index))
+
+data = pad_sequences(sequences, maxlen=maxlen)  # 返回的是个2维张量，长度为maxlen，只关注前maxlen个单词
+labels = np.asarray(labels)
+print('shape of data: ', data.shape)
+print('shape of labels: ', labels.shape)  # 该语料的测试集和训练集的样本数都是25000个。
+
+# ----------------------------------------------------------------------------------------------------------------
+# 训练集和验证集的划分
+# 打乱顺序的方法也很有意思，假如大小为n，那么先得到（0，n-1）的列表，再把列表给打乱，然后利用 data = data[indices]
+# 就相当于把字典给打乱了
+indices = np.arange(data.shape[0])
+np.random.shuffle(indices)
+data = data[indices]
+labels = labels[indices]
+
+# ----------------------------------------------------------------------------------------------------------------
+# 划分训练集和测试集。
+x_train = data[:training_samples]
+y_train = labels[:training_samples]
+# 验证集 ：Validation set     但是看下面的这里好像是测试集。
+x_val = data[training_samples: training_samples + validation_samples]
+y_val = labels[training_samples: training_samples + validation_samples]
+
+# ----------------------------------------------------------------------------------------------------------------
+# 解析 GloVe 词嵌入文件，embeddings_index  中 保存glove中已经训练好的词向量，
+glove_dir = 'D:\\PycharmProjects\\nlp\\glove\\glove.6B'
+embeddings_index = {}
+f = open(os.path.join(glove_dir, 'glove.6B.100d.txt'), encoding='UTF-8')
+for line in f:
+    # 每一个词向量的组成是，第一个是单词（就是原来的英文单词），后面是向量，也就是很多浮点数字。
+    values = line.split()
+    word = values[0]
+    coefs = np.asarray(values[1:], dtype='float32')
+    embeddings_index[word] = coefs
+f.close()
+# print('Found %s word vectors' % len(embeddings_index))
+
+
+# ----------------------------------------------------------------------------------------------------------------
+# 准备 GloVe 词嵌入矩阵
+embedding_dim = 100
+embedding_matrix = np.zeros((max_words, embedding_dim))
+for word, i in word_index.items():  # 字典的item（），相当于遍历（key，value）。（不严格，有多种用法）
+    # word_index中保存的，是由之前tokenize生成的  （词 ： 对应的下标）
+    if i < max_words:  # 因为规定个只关注出现频率最高的max_words个词。
+        embedding_vector = embeddings_index.get(word)  # 在glove中加载这个词的词向量，如果有个话，就是这个词的在glove中的词向量。
+                                                       # 如果没有的话，那就是初始定义的全零的词向量，但是这里有问题吧？？？？？？？？   不应该是随机初始化的吗？
+        if embedding_vector is not None:
+            embedding_matrix[i] = embedding_vector
+
+
+# ----------------------------------------------------------------------------------------------------------------
+# 构建模型
+model = Sequential()
+# 下面三行就是embedding中加入glove了。
+# 涉及到的一个重要的知识点是为什么这里的trainable = False
+# 如果一个模型的一部分是经过预训练的（如 Embedding 层），而另一部分是随机初始化的（如分类器），
+# 那么在训练期间不应该更新预训练的部分，以 避免丢失它们所保存的信息。随机初始化的层会引起较大的梯度更新，会破坏已经学到的特征。
+model.add(Embedding(max_words, embedding_dim, input_length=maxlen))
+# model.layers[0].set_weights([embedding_matrix])
+# model.layers[0].trainable = False
+model.add(Conv1D(256, 5, padding='same'))
+model.add(MaxPooling1D(3, 3, padding='same'))
+model.add(Conv1D(128, 5, padding='same'))
+model.add(MaxPooling1D(3, 3, padding='same'))
+model.add(Conv1D(64, 3, padding='same'))
+# model.add(Conv2D(filters=6, kernel_size=(5, 5), padding='same'))
+# model.add(MaxPool2D(pool_size=(2, 2), strides=2, padding='same'))
+model.add(Flatten())
+model.add(Dense(32, activation='relu'))
+model.add(Dense(1, activation='sigmoid'))
+model.summary()
+
+model.compile(optimizer='rmsprop',
+              loss='binary_crossentropy',
+              metrics=['acc'])
+history = model.fit(x_train, y_train,
+                    epochs=10,
+                    batch_size=32,
+                    # 这里是验证集集，（训练集测试集验证集） （慕课在这个地方标注有错误）
+                    validation_data=(x_val, y_val))
+model.save_weights('pre_trained_glove_model.h5')    # 保存的参数的路径
+
+# 图像绘制
+acc = history.history['acc']
+val_acc = history.history['val_acc']
+loss = history.history['loss']
+val_loss = history.history['val_loss']
+
+epochs = range(1, len(acc) + 1)
+
+plt.plot(epochs, acc, 'bo', label='Training acc')
+plt.plot(epochs, val_acc, 'b', label='Validation acc')
+plt.title('Training and validation accuracy')
+plt.legend()
+
+plt.figure()
+
+plt.plot(epochs, loss, 'bo', label='Training loss')
+plt.plot(epochs, val_loss, 'b', label='Validation loss')
+plt.title('Training and validation loss')
+plt.legend()
+
+plt.show()
+
+# ----------------------------------------------------------------------------------------------------------------
+# 测试：
+test_dir = os.path.join(imdb_dir, 'test')
+
+labels = []
+texts = []
+
+for label_type in ['neg', 'pos']:
+    dir_name = os.path.join(test_dir, label_type)
+    for fname in sorted(os.listdir(dir_name)):
+        if fname[-4:] == '.txt':
+            f = open(os.path.join(dir_name, fname), encoding='UTF-8')
+            texts.append(f.read())
+            f.close()
+            if label_type == 'neg':
+                labels.append(0)
+            else:
+                labels.append(1)
+
+sequences = tokenizer.texts_to_sequences(texts)
+x_test = pad_sequences(sequences, maxlen=maxlen)
+y_test = np.asarray(labels)
+
+model.load_weights('pre_trained_glove_model.h5')
+model.evaluate(x_test, y_test)
