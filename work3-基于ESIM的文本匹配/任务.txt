@@ -1,0 +1,6 @@
+中文论文解读：
+1.https://zhuanlan.zhihu.com/p/47580077（有代码）
+2.https://zhuanlan.zhihu.com/p/141622985
+3.https://www.cnblogs.com/zle1992/p/9100780.html（最后的图比较好）
+
+只关注普通的LSTM，树的LSTM放弃去了。
