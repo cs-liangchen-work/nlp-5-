@@ -3,4 +3,9 @@
 2.https://zhuanlan.zhihu.com/p/141622985
 3.https://www.cnblogs.com/zle1992/p/9100780.html（最后的图比较好）
 
-只关注普通的LSTM，树的LSTM放弃去了。
+只关注普通的LSTM，树的LSTM放弃了。
+
+
+结果形式是这样的：
+save model......
+epoch 1, train_acc 0.469925, dev_acc 0.575000, test_acc 0.576000, max_acc 0.575000, time 1:55:03.473793
