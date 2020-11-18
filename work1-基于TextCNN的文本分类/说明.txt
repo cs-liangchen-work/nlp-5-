@@ -1,1 +1,9 @@
 对卷积提取特征的过程很不清楚。
+
+
+
+输出结果样式：
+epoch 1, train_loss 0.691233, train_accuracy 0.537027, test_loss 0.664789, test_accuracy 0.721294, time 0:27:08.696139
+save model...
+epoch 2, train_loss 0.650057, train_accuracy 0.645097, test_loss 0.625349, test_accuracy 0.746197, time 0:27:39.013060
+save model...
