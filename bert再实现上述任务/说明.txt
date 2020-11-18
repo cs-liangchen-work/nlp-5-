@@ -17,3 +17,9 @@ http://xtf615.com/2020/07/05/transformers/
 直接执行命令即可。
 pip install pytorch_transformers
 
+
+bert-base-uncased下载及使用：网上资料太难找了，浪费了我好长时间。
+https://zhuanlan.zhihu.com/p/106880488
+https://www.cnblogs.com/lian1995/p/11947522.html
+https://blog.csdn.net/season77us/article/details/104311195?utm_medium=distribute.pc_relevant.none-task-blog-BlogCommendFromBaidu-2.not_use_machine_learn_pai&depth_1-utm_source=distribute.pc_relevant.none-task-blog-BlogCommendFromBaidu-2.not_use_machine_learn_pai
+
