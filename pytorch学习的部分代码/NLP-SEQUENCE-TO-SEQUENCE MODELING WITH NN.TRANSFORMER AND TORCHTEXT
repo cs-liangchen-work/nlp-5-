@@ -1,0 +1,70 @@
+
+
+
+
+
+
+
+
+
+运行结果：
+
+D:\anaconda3\envs\TF2.1\python.exe D:/PycharmProjects/mook/caicai2.py
+downloading wikitext-2-v1.zip
+.data\wikitext-2\wikitext-2-v1.zip: 100%|██████████| 4.48M/4.48M [03:05<00:00, 24.2kB/s]
+extracting
+| epoch   1 |   200/ 2981 batches | lr 5.00 | ms/batch 662.30 | loss  8.04 | ppl  3088.89
+D:\anaconda3\envs\TF2.1\lib\site-packages\torch\optim\lr_scheduler.py:370: UserWarning: To get the last learning rate computed by the scheduler, please use `get_last_lr()`.
+  "please use `get_last_lr()`.", UserWarning)
+| epoch   1 |   400/ 2981 batches | lr 5.00 | ms/batch 624.07 | loss  6.79 | ppl   892.82
+| epoch   1 |   600/ 2981 batches | lr 5.00 | ms/batch 650.68 | loss  6.38 | ppl   592.80
+| epoch   1 |   800/ 2981 batches | lr 5.00 | ms/batch 625.40 | loss  6.23 | ppl   508.73
+| epoch   1 |  1000/ 2981 batches | lr 5.00 | ms/batch 603.85 | loss  6.12 | ppl   454.25
+| epoch   1 |  1200/ 2981 batches | lr 5.00 | ms/batch 632.43 | loss  6.10 | ppl   444.64
+| epoch   1 |  1400/ 2981 batches | lr 5.00 | ms/batch 668.82 | loss  6.05 | ppl   422.34
+| epoch   1 |  1600/ 2981 batches | lr 5.00 | ms/batch 625.58 | loss  6.05 | ppl   425.13
+| epoch   1 |  1800/ 2981 batches | lr 5.00 | ms/batch 631.34 | loss  5.96 | ppl   385.86
+| epoch   1 |  2000/ 2981 batches | lr 5.00 | ms/batch 692.37 | loss  5.95 | ppl   384.92
+| epoch   1 |  2200/ 2981 batches | lr 5.00 | ms/batch 730.13 | loss  5.85 | ppl   348.05
+| epoch   1 |  2400/ 2981 batches | lr 5.00 | ms/batch 645.70 | loss  5.89 | ppl   361.99
+| epoch   1 |  2600/ 2981 batches | lr 5.00 | ms/batch 627.73 | loss  5.90 | ppl   363.39
+| epoch   1 |  2800/ 2981 batches | lr 5.00 | ms/batch 627.21 | loss  5.80 | ppl   329.54
+-----------------------------------------------------------------------------------------
+| end of epoch   1 | time: 2018.60s | valid loss  5.78 | valid ppl   324.38
+-----------------------------------------------------------------------------------------
+| epoch   2 |   200/ 2981 batches | lr 4.51 | ms/batch 626.19 | loss  5.80 | ppl   331.57
+| epoch   2 |   400/ 2981 batches | lr 4.51 | ms/batch 664.89 | loss  5.78 | ppl   322.62
+| epoch   2 |   600/ 2981 batches | lr 4.51 | ms/batch 797.37 | loss  5.61 | ppl   273.63
+| epoch   2 |   800/ 2981 batches | lr 4.51 | ms/batch 726.75 | loss  5.64 | ppl   281.75
+| epoch   2 |  1000/ 2981 batches | lr 4.51 | ms/batch 697.12 | loss  5.59 | ppl   266.98
+| epoch   2 |  1200/ 2981 batches | lr 4.51 | ms/batch 682.32 | loss  5.61 | ppl   273.99
+| epoch   2 |  1400/ 2981 batches | lr 4.51 | ms/batch 673.93 | loss  5.63 | ppl   278.93
+| epoch   2 |  1600/ 2981 batches | lr 4.51 | ms/batch 698.71 | loss  5.67 | ppl   289.00
+| epoch   2 |  1800/ 2981 batches | lr 4.51 | ms/batch 687.00 | loss  5.59 | ppl   267.86
+| epoch   2 |  2000/ 2981 batches | lr 4.51 | ms/batch 701.47 | loss  5.62 | ppl   276.96
+| epoch   2 |  2200/ 2981 batches | lr 4.51 | ms/batch 666.02 | loss  5.52 | ppl   249.48
+| epoch   2 |  2400/ 2981 batches | lr 4.51 | ms/batch 677.42 | loss  5.59 | ppl   266.82
+| epoch   2 |  2600/ 2981 batches | lr 4.51 | ms/batch 723.73 | loss  5.59 | ppl   267.94
+| epoch   2 |  2800/ 2981 batches | lr 4.51 | ms/batch 639.62 | loss  5.52 | ppl   248.40
+-----------------------------------------------------------------------------------------
+| end of epoch   2 | time: 2153.54s | valid loss  5.61 | valid ppl   273.38
+-----------------------------------------------------------------------------------------
+| epoch   3 |   200/ 2981 batches | lr 4.29 | ms/batch 665.02 | loss  5.55 | ppl   256.22
+| epoch   3 |   400/ 2981 batches | lr 4.29 | ms/batch 651.29 | loss  5.55 | ppl   257.53
+| epoch   3 |   600/ 2981 batches | lr 4.29 | ms/batch 645.70 | loss  5.37 | ppl   214.03
+| epoch   3 |   800/ 2981 batches | lr 4.29 | ms/batch 630.60 | loss  5.42 | ppl   224.94
+| epoch   3 |  1000/ 2981 batches | lr 4.29 | ms/batch 739.30 | loss  5.37 | ppl   215.05
+| epoch   3 |  1200/ 2981 batches | lr 4.29 | ms/batch 712.73 | loss  5.41 | ppl   223.71
+| epoch   3 |  1400/ 2981 batches | lr 4.29 | ms/batch 627.22 | loss  5.44 | ppl   229.38
+| epoch   3 |  1600/ 2981 batches | lr 4.29 | ms/batch 627.67 | loss  5.47 | ppl   237.95
+| epoch   3 |  1800/ 2981 batches | lr 4.29 | ms/batch 622.92 | loss  5.40 | ppl   221.64
+| epoch   3 |  2000/ 2981 batches | lr 4.29 | ms/batch 623.51 | loss  5.43 | ppl   229.02
+| epoch   3 |  2200/ 2981 batches | lr 4.29 | ms/batch 621.68 | loss  5.32 | ppl   203.77
+| epoch   3 |  2400/ 2981 batches | lr 4.29 | ms/batch 622.47 | loss  5.40 | ppl   221.54
+| epoch   3 |  2600/ 2981 batches | lr 4.29 | ms/batch 620.22 | loss  5.41 | ppl   223.39
+| epoch   3 |  2800/ 2981 batches | lr 4.29 | ms/batch 623.57 | loss  5.34 | ppl   208.35
+-----------------------------------------------------------------------------------------
+| end of epoch   3 | time: 2013.15s | valid loss  5.50 | valid ppl   244.36
+-----------------------------------------------------------------------------------------
+
+Process finished with exit code 0
