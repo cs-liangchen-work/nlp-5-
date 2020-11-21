@@ -1,4 +1,230 @@
+一共遗留了两个问题：
+1.masked：完全不明白。
+2.数据集的处理，主要是bptt 和 get_batch，    只知道过程，没有分析代码。
 
+
+加注释的代码：
+
+import math
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.nn import TransformerEncoder, TransformerEncoderLayer
+# ======================================= 定义transformer的结构 ======================================= #
+class TransformerModel(nn.Module):
+
+    def __init__(self, ntoken, ninp, nhead, nhid, nlayers, dropout=0.5):
+        super(TransformerModel, self).__init__()
+        self.model_type = 'Transformer'
+        self.pos_encoder = PositionalEncoding(ninp, dropout)
+        # 自己定义的一个位置嵌入。
+        encoder_layers = TransformerEncoderLayer(ninp, nhead, nhid, dropout)
+        # ninp 词向量嵌入的维度。
+        # encoder中核心的两步：self-attention, feedfoward, 经过这两步形状都不变。
+        self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
+        # 指定多少层用TransformerEncoderLaye定义的网络。
+        self.encoder = nn.Embedding(ntoken, ninp)
+        # 第一个参数 词的个数，第二个参数 嵌入的维度。
+        self.ninp = ninp  # ninp 词向量的深度。
+        self.decoder = nn.Linear(ninp, ntoken)
+        # 线性层，把多少维变成多少维。   相当于把词向量的深度变成了词的个数。
+        self.init_weights()
+
+    def generate_square_subsequent_mask(self, sz):
+        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        # 应该就是transformer中将位置为0的变成很大的负的偏执。
+        return mask
+
+    def init_weights(self):
+        # embedding嵌入层的随机初始化。
+        initrange = 0.1
+        self.encoder.weight.data.uniform_(-initrange, initrange)
+        self.decoder.bias.data.zero_()
+        self.decoder.weight.data.uniform_(-initrange, initrange)
+
+    def forward(self, src, src_mask):
+        src = self.encoder(src) * math.sqrt(self.ninp)  # 一般的嵌入向量层
+        src = self.pos_encoder(src)  # 加入位置信息的嵌入向量
+        output = self.transformer_encoder(src, src_mask)  # N个encoder
+        output = self.decoder(output)  # decoder，就是一个简单的线性层。
+        return output
+
+class PositionalEncoding(nn.Module):
+
+    def __init__(self, d_model, dropout=0.1, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0).transpose(0, 1)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + self.pe[:x.size(0), :]
+        return self.dropout(x)
+
+# ======================================= 加载并处理数据集 ======================================= #
+
+import torchtext
+from torchtext.data.utils import get_tokenizer
+TEXT = torchtext.data.Field(tokenize=get_tokenizer("basic_english"),
+                            init_token='<sos>',
+                            eos_token='<eos>',
+                            lower=True)
+train_txt, val_txt, test_txt = torchtext.datasets.WikiText2.splits(TEXT)
+# datasets.splits的用法有很多，感觉这个就是用来提取内部的数据集。
+# wikitext-2数据集,是torchtext中自然语言建模数据集之一。
+# 对数据集使用上述的Field。
+TEXT.build_vocab(train_txt)
+# Field对象TEXT通过调用build_vocab()方法来生成一个内置的Vocab对象。
+# 而且只能够通过train_txt，不能使用验证集 和 测试集的，否则很容易出现过拟合。
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# 定义一个分批次的函数。
+def batchify(data, bsz):
+    data = TEXT.numericalize([data.examples[0].text])
+    # numericalize ：
+    # Each item in the minibatch will be numericalized independently and the
+    # resulting tensors will be stacked at the first dimension.
+    # 这里暂时没有深入的看：data.examples[0].text
+
+    # Divide the dataset into bsz parts.
+    nbatch = data.size(0) // bsz
+    # 因为data是一个nlp的数据，一般为三维的（此时不包括批量的大小），在进行划分时显然是根据第一维来进行的。
+
+    # Trim off any extra elements that wouldn't cleanly fit (remainders).
+    data = data.narrow(0, 0, nbatch * bsz)
+    # 进行的是这一个处理：加入我有10个数据，我现在每个批次为4，所以一共有2个批次，只需要前8个就可以啦。
+    # `x.narrow`(*dimension*, *start*, *length*)
+    # 表示取变量x的第dimension维,的从索引start开始到,start+length范围的值。
+    # 从第一维度（表示句子的个数），从第0个句子开始，进行的长度为nbatch * bsz， 只需要取这么多句子出来。
+
+    # Evenly divide the data across the bsz batches.
+    data = data.view(bsz, -1).t().contiguous()
+    # 不想深入的理解实现了，反正就是实现了这样的一个目的：
+    # 变成了4维的了，第一维度batch的大小，即view函数（view就是一个变形函数）中的第一个参数，
+    # 然后通过后面的t().contiguous()   应该就实现了 第二个维度句子的个数，第三个维度句子中词的个数，
+    # 第四个维度每一个句子的词嵌入深度。
+    return data.to(device)
+
+batch_size = 20
+eval_batch_size = 10
+train_data = batchify(train_txt, batch_size)
+val_data = batchify(val_txt, eval_batch_size)
+test_data = batchify(test_txt, eval_batch_size)
+
+# ======================================= Functions to generate input and target sequence ======================================= #
+
+bptt = 35
+def get_batch(source, i):
+    seq_len = min(bptt, len(source) - 1 - i)
+    data = source[i:i+seq_len]
+    target = source[i+1:i+1+seq_len].reshape(-1)
+    return data, target
+
+ntokens = len(TEXT.vocab.stoi)  # the size of vocabulary   itos表示index to str  词汇的总数。
+# 也是decoder中的线性层要输出的大小，就是预测词典中每一个词汇是下一个词汇的可能性吧！
+emsize = 200  # embedding dimension   词向量的深度
+nhid = 200  # the dimension of the feedforward network model in nn.TransformerEncoder
+nlayers = 2  # the number of nn.TransformerEncoderLayer in nn.TransformerEncoder   encoder的层数
+nhead = 2  # the number of heads in the multiheadattention models     多头的头的个数。
+dropout = 0.2  # the dropout value
+model = TransformerModel(ntokens, emsize, nhead, nhid, nlayers, dropout).to(device)
+
+criterion = nn.CrossEntropyLoss()  # 定义损失函数为交叉熵函数。
+lr = 5.0  # learning rate
+optimizer = torch.optim.SGD(model.parameters(), lr=lr)
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
+# 调整学习率。
+# 使用的是学习率的指数衰减公式。
+# optimizer使用的优化器      1.0 多少step_size进行一次衰减，    衰减的乘法因子。
+
+import time
+def train():
+    model.train()  # Turn on the train mode
+    total_loss = 0.
+    start_time = time.time()
+    ntokens = len(TEXT.vocab.stoi)
+    # stoi：
+    # mapping token strings to numerical identifiers.
+    # 获取到了词的个数吧，
+    src_mask = model.generate_square_subsequent_mask(bptt).to(device)
+    for batch, i in enumerate(range(0, train_data.size(0) - 1, bptt)):
+        # 第三个参数是指每次的步长！
+        data, targets = get_batch(train_data, i)
+        # print(data.shape)         torch.Size([35, 20])
+        # print(targets.shape)      torch.Size([700])
+        optimizer.zero_grad()
+        if data.size(0) != bptt:
+            src_mask = model.generate_square_subsequent_mask(data.size(0)).to(device)
+        # print(src_mask.shape)  torch.Size([35, 35])
+        output = model(data, src_mask)
+        # print(output.shape)
+        # torch.Size([35, 20, 28785])
+        loss = criterion(output.view(-1, ntokens), targets)
+        # output.view(-1, ntokens)之后，向量的维度变为 [700]
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+        # （在BP过程中，感觉应该是和梯度相关的操作）会产生梯度消失/爆炸（就是偏导无限接近0，导致长时记忆无法更新），
+        # 那么最简单粗暴的方法，设定阈值，当梯度小于/大于阈值时，更新的梯度为阈值，
+        # nn.utils.clip_grad_norm
+        # 第一个参数：对谁？  模型的参数。
+        # 第二个参数： 梯度的最大范数
+        # 第三个参数： 规定范数的类型，默认为L2（原文：type of the used p-norm. Can be'inf'for infinity norm）
+        optimizer.step()
+
+        total_loss += loss.item()
+        log_interval = 200
+        if batch % log_interval == 0 and batch > 0:
+            cur_loss = total_loss / log_interval
+            elapsed = time.time() - start_time
+            print('| epoch {:3d} | {:5d}/{:5d} batches | '
+                  'lr {:02.2f} | ms/batch {:5.2f} | '
+                  'loss {:5.2f} | ppl {:8.2f}'.format(
+                    epoch, batch, len(train_data) // bptt, scheduler.get_lr()[0],
+                    elapsed * 1000 / log_interval,
+                    cur_loss, math.exp(cur_loss)))
+            total_loss = 0
+            start_time = time.time()
+
+def evaluate(eval_model, data_source):
+    eval_model.eval() # Turn on the evaluation mode
+    total_loss = 0.
+    ntokens = len(TEXT.vocab.stoi)
+    src_mask = model.generate_square_subsequent_mask(bptt).to(device)
+    with torch.no_grad():
+        for i in range(0, data_source.size(0) - 1, bptt):
+            data, targets = get_batch(data_source, i)
+            if data.size(0) != bptt:
+                src_mask = model.generate_square_subsequent_mask(data.size(0)).to(device)
+            output = eval_model(data, src_mask)
+            output_flat = output.view(-1, ntokens)
+            total_loss += len(data) * criterion(output_flat, targets).item()
+    return total_loss / (len(data_source) - 1)
+
+best_val_loss = float("inf")
+epochs = 3  # The number of epochs
+best_model = None
+
+for epoch in range(1, epochs + 1):
+    epoch_start_time = time.time()
+    train()
+    val_loss = evaluate(model, val_data)
+    print('-' * 89)
+    print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
+          'valid ppl {:8.2f}'.format(epoch, (time.time() - epoch_start_time),
+                                     val_loss, math.exp(val_loss)))
+    print('-' * 89)
+
+    if val_loss < best_val_loss:
+        best_val_loss = val_loss
+        best_model = model
+
+    scheduler.step()
 
 
 
