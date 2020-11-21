@@ -1,10 +1,9 @@
-一共遗留了两个问题：
-1.masked：完全不明白。
-2.数据集的处理，主要是bptt 和 get_batch，    只知道过程，没有分析代码。
-
+唯一的一点：
+    mask对自注意力矩阵进行处理，那么mask的大小应该与自注意力矩阵的大小一致，
+    但是代码中是和句子的大小一致？？？？？
+    https://blog.csdn.net/qq_35169059/article/details/101678207
 
 加注释的代码：
-
 import math
 import torch
 import torch.nn as nn
@@ -33,7 +32,20 @@ class TransformerModel(nn.Module):
     def generate_square_subsequent_mask(self, sz):
         mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
         mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
-        # 应该就是transformer中将位置为0的变成很大的负的偏执。
+        # 明白了！
+        # triu函数是将右下角的全部变成0，然后再使用一下transpose将第一维度和第二维度进行了变换，
+        # 就得到了如下矩阵，   为sz行，sz列，
+        # [1, 0, 0, 0]
+        # [1, 1, 0, 0]
+        # [1, 1, 1, 0]
+        # [1, 1, 1, 1]
+        # 第二步是将上述矩阵的0 全部变成 -inf 即负无穷，  将1 全部变为0.
+        # 这样加上自注意力矩阵之后，为 0 的位置就得到了一个很大的偏执项， 进行求softmax时 损失的概率就很少很少了。
+        # 这也符合 该例子中使用之前的预测之后的，之后的词是不能被看到的。
+        # tensor([[0., -inf, -inf, -inf],
+        #         [0., 0., -inf, -inf],
+        #         [0., 0., 0., -inf],
+        #         [0., 0., 0., 0.]])
         return mask
 
     def init_weights(self):
@@ -124,6 +136,8 @@ def get_batch(source, i):
     seq_len = min(bptt, len(source) - 1 - i)
     data = source[i:i+seq_len]
     target = source[i+1:i+1+seq_len].reshape(-1)
+    # 看这里，data 获取的是[i:i+seq_len]   而 target 获取的是[i+1:i+seq_len+1]   然后弄成一列
+    # 这符合对数据集的处理，  标签为下一个词。
     return data, target
 
 ntokens = len(TEXT.vocab.stoi)  # the size of vocabulary   itos表示index to str  词汇的总数。
@@ -161,6 +175,9 @@ def train():
         optimizer.zero_grad()
         if data.size(0) != bptt:
             src_mask = model.generate_square_subsequent_mask(data.size(0)).to(device)
+        # 使用if 进行判断，就是为了使得，得到的src_mask矩阵的大小 和 data的第一个维度相同。
+        # 为什么有必要呢？可能边界，没多大意思，不考虑了。
+        #
         # print(src_mask.shape)  torch.Size([35, 35])
         output = model(data, src_mask)
         # print(output.shape)
@@ -225,7 +242,6 @@ for epoch in range(1, epochs + 1):
         best_model = model
 
     scheduler.step()
-
 
 
 
