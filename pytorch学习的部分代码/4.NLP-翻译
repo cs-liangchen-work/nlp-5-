@@ -1,2 +1,5 @@
 使用的是seq2seq的翻译模型，注意的一点是decoder的时候，每输出一个都会作为下一次的输入。
 
+ The encoder reads an input sequence and outputs a single vector, and the decoder reads that vector to produce an output sequence.
+ 
+
