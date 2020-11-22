@@ -2,4 +2,8 @@
 
  The encoder reads an input sequence and outputs a single vector, and the decoder reads that vector to produce an output sequence.
  
+ 值的仔细理解一个gru的使用：
+ https://zhuanlan.zhihu.com/p/37217734
+ 非常棒的一篇知乎文章。
+ 
 
