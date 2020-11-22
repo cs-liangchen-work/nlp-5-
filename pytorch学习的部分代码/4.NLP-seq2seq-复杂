@@ -10,3 +10,10 @@
 2、输出的隐含层向量只返回最后一层所对应的隐含层输出。这是设计的原因是很多时候只需要使用最后一层的隐含层输出。比如Sequence to Sequence模型中的encoder一般就只传递最后一层的隐层输出给decoder。
 
 使用的注意力没太搞懂。
+
+append the EOS token to both sequences
+
+the decoder is given the <SOS> token as its first input, and the last hidden state of the encoder as its first hidden state.
+
+“Teacher forcing” is the concept of using the real target outputs as each next input, instead of using the decoder’s guess as the next input. 
+decoder时使用真实的token作为下一个输出。而不是上一个预测输出的。
