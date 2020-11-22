@@ -1,8 +1,5 @@
 使用最简单的incoder 和 decoder进行seq2seq的实现。
 
-
-
-
-1.将上下文向量 c 当成是 RNN 的初始隐藏状态hidden。后续只接受上一个神经元的隐藏层状态 h' 而不接收其他的输入 x。
-
-2.
+有图的链接:
+https://zhuanlan.zhihu.com/p/57155059
+https://www.jianshu.com/p/80436483b13b
