@@ -1,0 +1,201 @@
+# 自己再写一遍代码吧！
+# 前面还算是自己写的，后面又懒得写了！o(╥﹏╥)o
+import torch
+import gensim
+import datetime
+import numpy as np
+import torch
+import torch.nn.utils.rnn as rnn_utils
+import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader, TensorDataset
+from gensim.models import Word2Vec
+from collections import Counter
+import argparse
+from sklearn.metrics import accuracy_score
+import os
+from gensim.models import KeyedVectors
+from gensim.test.utils import datapath, get_tmpfile
+from gensim.scripts.glove2word2vec import glove2word2vec
+
+# ======================== 一些参数的初始化 ======================== #
+parser = argparse.ArgumentParser()
+parser.add_argument('--batch_size', type=int, default=10)
+parser.add_argument('--num_epoch', type=int, default=5)
+parser.add_argument('--lr', type=float, default=1e-4)
+parser.add_argument('--weight_decay', type=float, default=1e-7)
+parser.add_argument('--ckp', type=str, default='./ckp/model_AW.pt')  # 保存模型的参数.
+parser.add_argument('--acc_min', type=float, default=0.0)
+parser.add_argument('--nums_channels', type=int, default=5)
+args = parser.parse_args()
+acc_min = args.acc_min
+device = torch.device('cpu')
+
+# ======================== 数据预处理 ======================== #
+with open('./minitrain.txt', encoding='utf-8') as ftrain:
+    train_feature_line = [line.strip().split() for line in ftrain.readlines()]
+train_label_line = [1]*(len(train_feature_line)//2) + [0]*(len(train_feature_line)//2)
+with open('./minivalid.txt', encoding='utf-8') as fvalid:
+    valid_feature_line = [line.strip().split() for line in fvalid.readlines()]
+valid_label_line = [1]*(len(valid_feature_line)//2) + [0]*(len(valid_feature_line)//2)
+
+w2v_model = Word2Vec.load('word2vec_model.txt')  # 训练的word2vec中，词向量embed：128， 加入了【UNK】和【PAD】
+word2id = dict(zip(w2v_model.wv.index2word, range(len(w2v_model.wv.index2word))))
+id2word = {idx: word for idx, word in enumerate(w2v_model.wv.index2word)}
+unk = word2id['[UNK]']
+padding_value = word2id['[PAD]']
+
+# 将词转化为对应的下标：
+train_feature = [[word2id[word] if word in word2id else unk for word in line] for line in train_feature_line]
+valid_feature = [[word2id[word] if word in word2id else unk for word in line] for line in valid_feature_line]
+
+# 将句子 标签 配对，放入一个列表中，并转化为tensor      列表中的第一个元素是句子的单词组成的列表，第二个元素是标签。
+def get_dataset(features, labels):
+    data = []
+    for i in range(len(features)):
+        temp = []
+        temp.append(torch.tensor(features[i]).long())
+        temp.append(torch.tensor([labels[i]]).long())
+        data.append(temp)
+    return data
+
+
+train_data = get_dataset(train_feature, train_label_line)
+test_data = get_dataset(valid_feature, valid_label_line)
+
+
+# DataLoader的使用：
+def collate_fn(sample_data):
+    sample_data.sort(key=lambda data: len(data[0]), reverse=True)  # 倒序排序,貌似没啥用
+    sample_feature = []
+    sample_label = []
+    for data in sample_data:
+        sample_feature.append(data[0])
+        sample_label.append(data[1])
+    sample_feature = rnn_utils.pad_sequence(sample_feature, batch_first=True, padding_value=padding_value)
+    return sample_feature, sample_label
+
+
+train_dataloader = DataLoader(train_data, args.batch_size, collate_fn=collate_fn, shuffle=True)
+test_dataloader = DataLoader(test_data, args.batch_size, collate_fn=collate_fn, shuffle=True)
+# 之后提取出来
+# torch.Size([10, 688])   批量，批量中最长句子的长度。
+# torch.Size([10])    每一次训练的批量为10，所以有10个标签。
+
+
+class TextCNN(torch.nn.Module):
+    def __init__(self, input_size, hidden_size, output_size, embeding_vector, kernel_sizes, out_num_channels):
+        # 词汇的总数，嵌入的深度，
+        super().__init__()
+        # 固定词向量
+        self.embedding = torch.nn.Embedding(input_size, hidden_size)
+        self.embedding.weight.data.copy_(torch.from_numpy(embeding_vector))
+        self.embedding.weight.requires_grad = False
+        # 要训练的词向量
+        self.constant_embedding = torch.nn.Embedding(input_size, hidden_size)
+        self.constant_embedding.weight.data.copy_(torch.from_numpy(embeding_vector))
+
+        self.dropout = torch.nn.Dropout(0.5)
+
+        self.convs = torch.nn.ModuleList()
+        for c, k in zip(out_num_channels, kernel_sizes):
+            self.convs.append(torch.nn.Conv1d(2*hidden_size, c, k))
+
+        self.out_linear = torch.nn.Linear(sum(out_num_channels), output_size)  # 下面解释。
+
+        self.pool = GlobalMaxPool1d()
+
+    def forward(self, x):
+        embeddings = torch.cat((self.embedding(x), self.constant_embedding(x)), dim=2).permute(0, 2, 1)  # 句子长度和embed深度进行交换。
+        out = torch.cat([self.pool(F.relu(conv(embeddings))).squeeze(-1) for conv in self.convs], dim=1)
+        # 对这里进行细致的分析：
+        # 每进行一次池化：维度：（  句子个数, 输出通道，每一个通道计算的值（由核移动决定） ）
+        #       进行激活函数，不改变维度。
+        #       进行自定义的第三维度最大池化，维度变为，（  句子个数, 输出通道，1 ）
+        #       squeeze（-1），去掉最后一个1，维度：（  句子个数, 输出通道）
+        # 多次池化的进行拼接，（  句子个数, 总的输出通道个数）  ，因此：torch.nn.Linear(sum(out_num_channels), output_size)
+        out = self.out_linear(self.dropout(out))
+        # （  句子个数, 总的输出通道个数） ->  （  句子个数,  2分类的2）
+        return out
+
+# 根据论文中的要求，我们依然需要进行池化处理，对卷积得到的三维矩阵进行池化处理，
+# 应该是对每一个通道的结果进行池化操作，即对第三个维度进行池化，取最大。
+class GlobalMaxPool1d(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+    def forward(self, x):
+        return F.max_pool1d(x, kernel_size=x.shape[2])
+
+# ======================== 模型训练 ======================== #
+loss_func = torch.nn.CrossEntropyLoss()
+embedding_matrix = w2v_model.wv.vectors
+input_size = embedding_matrix.shape[0]
+hidden_size = embedding_matrix.shape[1]
+kernel_size = [3, 4, 5]  # 根据论文中的说明，设置不同的大小，来提取到不同的特征
+out_nums_channels = [args.nums_channels, args.nums_channels, args.nums_channels]  # 设置输出通道数，相同即可。
+
+model = TextCNN(input_size, hidden_size, 2, embedding_matrix, kernel_size, out_nums_channels).to(device)
+# input_size=119281, hidden_size=128,
+# print(embedding_matrix.shape) (119281, 128)    embedding_matrix  中存放的是每一词的词向量。
+
+optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+
+# 如果有模型，那么应该加载模型，在原模型的基础上进行训练，效果好。
+if os.path.exists(args.ckp):
+    print("loading model......")
+    model.load_state_dict(torch.load(args.ckp))
+
+train_loss = []
+train_accuracy = []
+test_loss = []
+test_accuracy = []
+
+def test_evaluate(model, test_dataloader, batch_size):
+    test_l, test_a, n = 0.0, 0.0, 0
+    model.eval()
+    with torch.no_grad():
+        for data_x, data_y in test_dataloader:
+            label = torch.Tensor(data_y).long().to(device)
+            out = model(data_x.to(device))
+            loss = loss_func(out, label)
+            prediction = out.argmax(dim=1).data.cpu().numpy()
+            label = label.data.cpu().numpy()
+            test_l += loss.item()
+            test_a += accuracy_score(label, prediction)
+            n += 1
+    return test_l / n, test_a / n
+
+for epoch in range(args.num_epoch):
+    model.train()
+    train_l, train_a, n = 0.0, 0.0, 0
+    start = datetime.datetime.now()
+    for data_x, data_y in train_dataloader:
+        label = torch.Tensor(data_y).long().to(device)
+        out = model(data_x.to(device))
+        # print(out.shape)  torch.Size([10, 2])
+        # print(label.shape)  torch.Size([10])
+        loss = loss_func(out, label)
+        train_l += loss.item()
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        prediction = out.argmax(dim=1).data.cpu().numpy()
+        # 获得第一维最大值所在的下标   二维 -> 一维
+        # print(prediction)  [1 1 1 1 1 1 0 1 1 0]
+        label = label.data.cpu().numpy()
+        # print(label)  [0 1 0 1 1 1 0 1 1 0]    维度不变。
+        train_a += accuracy_score(label, prediction)
+        n += 1
+    # 训练集评价指标
+    train_loss.append(train_l / n)
+    train_accuracy.append(train_a / n)
+    # 测试集评价指标
+    test_l, test_a = test_evaluate(model, test_dataloader, args.batch_size)
+    test_loss.append(test_l)
+    test_accuracy.append(test_a)
+    end = datetime.datetime.now()
+    print('epoch %d, train_loss %f, train_accuracy %f, test_loss %f, test_accuracy %f, time %s' %
+          (epoch + 1, train_loss[epoch], train_accuracy[epoch], test_loss[epoch], test_accuracy[epoch], end - start))
+    if test_accuracy[epoch] > acc_min:
+        acc_min = test_accuracy[epoch]
+        torch.save(model.state_dict(), args.ckp)
+        print("save model...")
