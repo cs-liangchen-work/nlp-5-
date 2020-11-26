@@ -1,0 +1,185 @@
+import torch
+from pytorch_transformers import BertTokenizer, BertModel
+from torch.utils.data import DataLoader, TensorDataset
+import argparse
+import datetime
+from sklearn.metrics import accuracy_score
+
+# ======================================= 一些初始化参数 ======================================= #
+parser = argparse.ArgumentParser()
+parser.add_argument('--cuda', type=str, default='cpu')
+parser.add_argument('--num_epoch', type=int, default=5)
+parser.add_argument('--lr', type=float, default=2e-5)
+parser.add_argument('--ckp', type=str, default='ckp/model_AW.pt')
+parser.add_argument('--max_acc', type=float, default=0.0)
+args = parser.parse_args()
+device = torch.device('cpu')
+num_epoch = args.num_epoch
+lr = args.lr
+ckp = args.ckp
+max_acc = args.max_acc
+
+
+# ======================================= 数据处理 ======================================= #
+# 进行文本分类属于单个句子的问题，     形式为    【cls】+ 句子 + 【sep】
+
+# 训练集：
+with open('data/mini_train.txt', 'r', encoding='utf-8') as f:
+    train_feature_line = ['[CLS] ' + line.strip() + ' [SEP]' for line in f.readlines()]
+with open('data/mini_train_label.txt', 'r', encoding='utf-8') as f:
+    train_label_line = [line.strip() for line in f.readlines()]
+
+# 测试集
+with open('data/mini_test.txt', 'r', encoding='utf-8') as f:
+    test_feature_line = ['[CLS] ' + line.strip() + ' [SEP]' for line in f.readlines()]
+with open('data/mini_test_label.txt', 'r', encoding='utf-8') as f:
+    test_label_line = [line.strip() for line in f.readlines()]
+
+# bert模型套路：
+tokenizer = BertTokenizer.from_pretrained('./bert-base-uncased/vocab.txt')
+train_feature = [tokenizer.tokenize(line) for line in train_feature_line]
+test_feature = [tokenizer.tokenize(line) for line in test_feature_line]
+
+train_feature_id = [tokenizer.convert_tokens_to_ids(line) for line in train_feature]
+test_feature_id = [tokenizer.convert_tokens_to_ids(line) for line in test_feature]
+print('loading tokenizer...')
+
+# label2id
+label2id = {'O': 0, 'B-LOC': 1, 'B-PER': 2, 'B-ORG': 3, 'I-PER': 4, 'I-ORG': 5, 'B-MISC': 6, 'I-LOC': 7, 'I-MISC': 8,
+            'START': 9, 'STOP': 10}
+label_pad = 0
+train_label_id = [[label2id[word] if word in label2id else label_pad for word in words.split()] for words in train_label_line]
+test_label_id = [[label2id[word] if word in label2id else label_pad for word in words.split()] for words in test_label_line]
+# print(train_label_id)  [[3, 0, 6, 0, 0, 0, 6, 0, 0], [2, 4, 1, 0, 0, 3, 5, 0, 0, 0,  .....
+
+# pad句子 & 截取句子
+# train
+for j in range(len(train_feature_id)):
+    i = train_feature_id[j]
+    if len(i) < 50:
+        train_feature_id[j].extend([0] * (50 - len(i)))
+    else:
+        train_feature_id[j] = train_feature_id[j][0:49] + [train_feature_id[j][-1]]
+# test
+for j in range(len(test_feature_id)):
+    i = test_feature_id[j]
+    if len(i) < 50:
+        test_feature_id[j].extend([0] * (50 - len(i)))
+    else:
+        test_feature_id[j] = test_feature_id[j][0:49] + [test_feature_id[j][-1]]
+
+# pad标签 & 截取标签
+# train
+for j in range(len(train_label_id)):
+    train_label_id[j] = [9] + train_label_id[j]
+    i = train_label_id[j]
+    if len(i) < 49:
+        train_label_id[j].extend([0] * (49 - len(i)))
+        train_label_id[j] = train_label_id[j] + [10]
+    else:
+        train_label_id[j] = train_label_id[j][0:49] + [10]
+# test
+for j in range(len(test_label_id)):
+    test_label_id[j] = [9] + test_label_id[j]
+    i = test_label_id[j]
+    if len(i) < 50:
+        test_label_id[j].extend([0] * (49 - len(i)))
+        test_label_id[j] = test_label_id[j] + [10]
+    else:
+        test_label_id[j] = test_label_id[j][0:49] + [10]
+
+# Texttorch：
+train_set = TensorDataset(torch.LongTensor(train_feature_id), torch.LongTensor(train_label_id))
+train_loader = DataLoader(dataset=train_set, batch_size=5, shuffle=True)
+test_set = TensorDataset(torch.LongTensor(test_feature_id), torch.LongTensor(test_label_id))
+test_loader = DataLoader(dataset=test_set, batch_size=5, shuffle=False)  # 主要关注其将batch_size进行了设定。
+
+# ======================================= bert ======================================= #
+class Bert(torch.nn.Module):
+    def __init__(self):
+        super(Bert, self).__init__()
+
+        # 读取模型。
+        self.model = BertModel.from_pretrained('./bert-base-uncased/').to(device)
+        embedding_dim = self.model.config.hidden_size
+
+        # 添加线性层。
+        self.dropout = torch.nn.Dropout(0.1)
+        self.fc = torch.nn.Linear(embedding_dim, 11)
+
+    def forward(self, tokens, attention_mask):
+        output = self.model(tokens, attention_mask=attention_mask)
+        output = output[0][:, :, :]  # output[0](batch size, sequence length, model hidden dimension)
+        output = self.dropout(output)
+        output = self.fc(output)
+        return output
+
+# ======================================= 测试 ======================================= #
+def test_evaluate(test_loader, model, max_acc):
+    test_l, n = 0.0, 0
+    out_epoch, label_epoch = [], []
+    loss_func = torch.nn.CrossEntropyLoss()
+    model.eval()
+
+    with torch.no_grad():
+        for batch_idx, (data, label) in enumerate(test_loader):
+            out = model(data.to(device), attention_mask=(data > 0).to(device))
+            loss = loss_func(out.reshape(-1, 11), label.reshape(-1).to(device))
+            test_l += loss.item()
+            n += 1
+
+            prediction = out.reshape(-1, 11).argmax(dim=1).data.cpu().numpy().tolist()
+            label = label.reshape(-1).view(1, -1).squeeze().data.cpu().numpy().tolist()
+            out_epoch.extend(prediction)
+            label_epoch.extend(label)
+
+            test_l += loss.item()
+            n += 1
+
+        acc = accuracy_score(label_epoch, out_epoch)
+        if acc > max_acc:
+            max_acc = acc
+            torch.save(model.state_dict(), args.ckp)
+            print("save model......")
+
+        return test_l / n, acc, max_acc
+
+
+# ======================================= 训练 ======================================= #
+
+loss_func = torch.nn.CrossEntropyLoss()
+model = Bert().to(device)
+optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+max_acc = args.max_acc
+print('start trainning....')
+for epoch in range(args.num_epoch):
+
+    train_l, n = 0.0, 0
+    out_epoch, label_epoch = [], []
+    start = datetime.datetime.now()
+
+    for batch_idx, (data, label) in enumerate(train_loader):
+        model.train()
+        # print(data.shape)  [5, 512]
+        out = model(data.to(device), attention_mask=(data > 0).to(device))
+        # print(out.shape)  torch.Size([5, 50, 11])
+        # print(label.shape)  torch.Size([5, 50])
+        loss = loss_func(out.reshape(-1, 11), label.reshape(-1).to(device))
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        train_l += loss.item()
+        n += 1
+
+        prediction = out.reshape(-1, 11).argmax(dim=1).data.cpu().numpy().tolist()
+        label = label.reshape(-1).view(1, -1).squeeze().data.cpu().numpy().tolist()
+        out_epoch.extend(prediction)
+        label_epoch.extend(label)
+
+    train_acc = accuracy_score(label_epoch, out_epoch)
+    train_loss = train_l / n
+    test_loss, test_acc, max_acc = test_evaluate(test_loader, model, max_acc)
+    end = datetime.datetime.now()
+
+    print('epoch %d,train_loss %f, test_loss %f,  train_acc %f, test_acc %f, max_acc %f, time %s' %
+          (epoch + 1, train_loss, test_loss, train_acc, test_acc, max_acc, end - start))
