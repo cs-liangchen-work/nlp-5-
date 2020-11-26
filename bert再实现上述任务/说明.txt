@@ -23,3 +23,9 @@ https://zhuanlan.zhihu.com/p/106880488
 https://www.cnblogs.com/lian1995/p/11947522.html
 https://blog.csdn.net/season77us/article/details/104311195?utm_medium=distribute.pc_relevant.none-task-blog-BlogCommendFromBaidu-2.not_use_machine_learn_pai&depth_1-utm_source=distribute.pc_relevant.none-task-blog-BlogCommendFromBaidu-2.not_use_machine_learn_pai
 
+
+
+bert的输入及输出，以及使用bert解决具体问题的思路：
+
+https://www.cnblogs.com/gczr/p/11785930.html
+https://cloud.tencent.com/developer/article/1389555
