@@ -10,3 +10,19 @@
 [cls]  :    9
 [sep]  :    10
 填充的标签： 0
+
+
+
+结果样式：
+D:\anaconda3\envs\TF2.1\python.exe D:/PycharmProjects/mook/nlp/nlp_beginner/work6-bert-work2/code.py
+loading tokenizer...
+start trainning....
+save model......
+epoch 1,train_loss 1.665015, test_loss 0.961032,  train_acc 0.680800, test_acc 0.886000, max_acc 0.886000, time 0:00:32.320094
+epoch 2,train_loss 0.624387, test_loss 0.609217,  train_acc 0.890000, test_acc 0.886000, max_acc 0.886000, time 0:00:28.298771
+epoch 3,train_loss 0.561050, test_loss 0.552688,  train_acc 0.890000, test_acc 0.886000, max_acc 0.886000, time 0:00:27.010504
+epoch 4,train_loss 0.512868, test_loss 0.523588,  train_acc 0.890000, test_acc 0.886000, max_acc 0.886000, time 0:00:27.372625
+save model......
+epoch 5,train_loss 0.471689, test_loss 0.467131,  train_acc 0.892800, test_acc 0.900000, max_acc 0.900000, time 0:00:31.477326
+
+Process finished with exit code 0
