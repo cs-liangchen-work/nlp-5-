@@ -1,3 +1,16 @@
 
 错误：
 进行填充的时候，最后一个不是[SEP]，应该写错了吧！
+
+
+
+
+
+运行结果展示：
+
+D:\anaconda3\envs\TF2.1\python.exe D:/PycharmProjects/mook/nlp/nlp_beginner/work4-ber-twork1/Acode.py
+10
+loading tokenizer...
+start trainning....
+save model......
+epoch 1,train_loss 0.805146, test_loss 0.676029,  train_acc 0.480000, test_acc 0.600000, max_acc 0.600000, time 0:07:49.069136
