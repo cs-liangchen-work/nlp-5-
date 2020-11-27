@@ -1,13 +1,6 @@
 该部分是实现transformer的一个代码，预测输入之后的下一个字是什么。
 
 
-
-
-唯一的一点不清楚：
-    mask对自注意力矩阵进行处理，那么mask的大小应该与自注意力矩阵的大小一致，
-    但是代码中是和句子的大小一致？？？？？
-    https://blog.csdn.net/qq_35169059/article/details/101678207
-
 加注释的代码：
 import math
 import torch
@@ -315,3 +308,199 @@ D:\anaconda3\envs\TF2.1\lib\site-packages\torch\optim\lr_scheduler.py:370: UserW
 -----------------------------------------------------------------------------------------
 
 Process finished with exit code 0
+
+
+
+
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+第二次的代码：
+
+import math
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.nn import TransformerEncoder, TransformerEncoderLayer
+import torchtext
+from torchtext.data.utils import get_tokenizer
+import time
+
+# ======================================= 定义transformer的结构 ======================================= #
+class PositionalEncoding(nn.Module):
+
+    def __init__(self, d_model, dropout=0.1, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0).transpose(0, 1)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + self.pe[:x.size(0), :]
+        return self.dropout(x)
+
+
+class TransformerModel(nn.Module):
+    def __init__(self, ntoken, ninp, nhead, nhid, nlayers, dropout=0.5):
+        super(TransformerModel, self).__init__()
+        self.ninp = ninp
+        # 词嵌入
+        self.encoder = nn.Embedding(ntoken, ninp)
+        self.pos_encoder = PositionalEncoding(ninp, dropout)
+        # decoder
+        encoder_layers = TransformerEncoderLayer(ninp, nhead, nhid, dropout)  # self-attention+feedfoward
+        self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
+        # ntoken分类
+        self.decoder = nn.Linear(ninp, ntoken)
+
+    def generate_square_subsequent_mask(self, sz):
+        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+        # [1, 1, 1, 1]      [1, 1, 1, 1]      [1, 0, 0, 0]
+        # [1, 1, 1, 1]      [0, 1, 1, 1]      [1, 1, 0, 0]
+        # [1, 1, 1, 1]      [0, 0, 1, 1]      [1, 1, 1, 0]
+        # [1, 1, 1, 1]      [0, 0, 0, 1]      [1, 1, 1, 1]
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        # tensor([[0., -inf, -inf, -inf],
+        #         [0., 0., -inf, -inf],
+        #         [0., 0., 0., -inf],
+        #         [0., 0., 0., 0.]])
+        return mask
+
+    def forward(self, src, src_mask):
+        src = self.encoder(src) * math.sqrt(self.ninp)
+        src = self.pos_encoder(src)
+        output = self.transformer_encoder(src, src_mask)
+        output = output = self.decoder(output)
+        return output
+
+# ======================================= 加载并处理数据集 ======================================= #
+TEXT = torchtext.data.Field(tokenize=get_tokenizer('basic_english'),
+                            init_token='<sos>',
+                            eos_token='<eos>',
+                            lower=True)
+train_txt, val_txt, test_txt = torchtext.datasets.WikiText2.splits(TEXT)
+TEXT.build_vocab(train_txt)
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# 定义一个分批次的函数。
+def batchify(data, batch_size):
+    data = TEXT.numericalize([data.examples[0].text])
+    # 划分:
+    nbatch = data.size(0) // batch_size
+    data = data.narrow(0, 0, nbatch * batch_size)
+    data = data.view(batch_size, -1).t().contiguous()
+
+    return data.to(device)
+
+batch_size = 20
+eval_batch_size = 10
+train_data = batchify(train_txt, batch_size)
+val_data = batchify(val_txt, eval_batch_size)
+test_data = batchify(test_txt, eval_batch_size)
+# 均为torch.Size([XXXX, 20])的格式。
+
+# ======================================= Functions to generate input and target sequence ======================================= #
+
+bptt = 35
+def get_batch(source, i):
+    seq_len = min(bptt, len(source) - 1 - i)
+    data = source[i:i+seq_len]
+    # print(data.shape)   torch.Size([35, 20])
+    target = source[i+1:i+1+seq_len].reshape(-1)
+    # 看这里，data 获取的是[i:i+seq_len]   而 target 获取的是[i+1:i+seq_len+1]   然后弄成一列
+    # 这符合对数据集的处理，  标签为下一个词。
+    return data, target
+
+# 模型参数
+ntokens = len(TEXT.vocab.stoi)
+emsize = 200
+nhid = 200  # the dimension of the feedforward network model in nn.TransformerEncoder
+nlayers = 2  # the number of nn.TransformerEncoderLayer in nn.TransformerEncoder   encoder的层数
+nhead = 2  # 多头的头的个数。
+dropout = 0.2
+model = TransformerModel(ntokens, emsize, nhead, nhid, nlayers, dropout).to(device)
+
+# 模型使用的：
+criterion = nn.CrossEntropyLoss()
+lr = 5.0
+optimizer = torch.optim.SGD(model.parameters(), lr=lr)
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
+
+def train():
+    model.train()
+    total_loss = 0.
+    start_time = time.time()
+    ntokens = len(TEXT.vocab.stoi)
+    src_mask = model.generate_square_subsequent_mask(bptt).to(device)
+    for batch, i in enumerate(range(0, train_data.size(0) - 1, bptt)):
+        data, targets = get_batch(train_data, i)
+        # print(data.shape)         torch.Size([35, 20])
+        # print(targets.shape)      torch.Size([700])
+        optimizer.zero_grad()
+        if data.size(0) != bptt:
+            src_mask = model.generate_square_subsequent_mask(data.size(0)).to(device)
+        # print(src_mask.shape)  torch.Size([35, 35])
+        output = model(data, src_mask)
+        # print(output.shape)
+        # torch.Size([35, 20, 28785])
+        loss = criterion(output.view(-1, ntokens), targets)
+        # output.view(-1, ntokens)之后，向量的维度变为 [700，28785]
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+        optimizer.step()
+        total_loss += loss.item()
+        log_interval = 200
+        if batch % log_interval == 0 and batch > 0:
+            cur_loss = total_loss / log_interval
+            elapsed = time.time() - start_time
+            print('| epoch {:3d} | {:5d}/{:5d} batches | '
+                  'lr {:02.2f} | ms/batch {:5.2f} | '
+                  'loss {:5.2f} | ppl {:8.2f}'.format(
+                    epoch, batch, len(train_data) // bptt, scheduler.get_lr()[0],
+                    elapsed * 1000 / log_interval,
+                    cur_loss, math.exp(cur_loss)))
+            total_loss = 0
+            start_time = time.time()
+
+def evaluate(eval_model, data_source):
+    eval_model.eval()  # Turn on the evaluation mode
+    total_loss = 0.
+    ntokens = len(TEXT.vocab.stoi)
+    src_mask = model.generate_square_subsequent_mask(bptt).to(device)
+    with torch.no_grad():
+        for i in range(0, data_source.size(0) - 1, bptt):
+            data, targets = get_batch(data_source, i)
+            if data.size(0) != bptt:
+                src_mask = model.generate_square_subsequent_mask(data.size(0)).to(device)
+            output = eval_model(data, src_mask)
+            output_flat = output.view(-1, ntokens)
+            total_loss += len(data) * criterion(output_flat, targets).item()
+    return total_loss / (len(data_source) - 1)
+
+best_val_loss = float("inf")
+epochs = 3  # The number of epochs
+best_model = None
+
+for epoch in range(1, epochs + 1):
+    epoch_start_time = time.time()
+    train()
+    val_loss = evaluate(model, val_data)
+    print('-' * 89)
+    print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
+          'valid ppl {:8.2f}'.format(epoch, (time.time() - epoch_start_time),
+                                     val_loss, math.exp(val_loss)))
+    print('-' * 89)
+
+    if val_loss < best_val_loss:
+        best_val_loss = val_loss
+        best_model = model
+
+    scheduler.step()
