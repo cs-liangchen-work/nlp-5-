@@ -1,296 +1,288 @@
-# 该代码为在 portorch基础上进行修改的代码。
+'''
+感谢自己没有放弃将官网的pytorch改为批量的输入。虽然大部分的修改都是用加一层for循环来水的。
+
+存在以下疑问：
+
+问题1：
+为什么我的loss在反向传播的时候：RuntimeError: element 0 of tensors does not require grad and does not have a grad_fn ？
+就是告诉我这个变量不能进行误差的反向传播，当我加了一个loss.requires_grad_(True)。表示让这个变量可以进行了。为什么之前没有出现过？
+可能的原因，自己在过程中定义了list形式的。
+
+问题2：
+loss.backward()的怎么知道哪些参数是要进行更新的？
+我想到了在学官网的梯度传播的时候，有说可以看整个计算过程，因此，pytorch架构可能可以列出从输入到计算loss整个过程的计算图，来更新参数？
+但是为什么定义中的抓太转移概率矩阵会进行更新，我仔细看了看，可能其他的self.XXX的内容也会更新，只是下次重新传入了。
+不用forward应该也是可以实现反向传播的。
+
+
+
+'''
+
+
+
+
 import torch
 import torch.autograd as autograd
 import torch.nn as nn
 import torch.optim as optim
+import argparse
 import gensim
+from torchtext.data import Field, Example, Dataset, BucketIterator, Iterator
+from torch import nn
+import torch.nn.functional as F
+from sklearn.metrics import accuracy_score
+import datetime
+from collections import Counter
+import torch
+import argparse
 from gensim.models import Word2Vec
-from tkinter import _flatten
-
+import datetime
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, classification_report
+import os
 # 设计随机初始化种子
 torch.manual_seed(1)
 
-# ------------------------------------------------------pytorch提供的代码，主要定义一些函数和对模型的定义。---------------------------------------
+'''
+首先进行说明，损失函数是自己定义的，因此在进行训练的时候会有一些差异。
+'''
+
+# ======================================= 一些初始化参数 ======================================= #
+parser = argparse.ArgumentParser()
+parser.add_argument('--batch_size', type=int, default=10)
+parser.add_argument('--num_epoch', type=int, default=5)
+parser.add_argument('--lr', type=float, default=0.0004)
+parser.add_argument('--weight_decay', type=float, default=0)
+parser.add_argument('--ckp', type=str, default='model_AW.pt')
+parser.add_argument('--max_acc', type=float, default=0.01)
+parser.add_argument('--num_layers', type=int, default=1)  # 双向LSTM的层数。
+args = parser.parse_args()
+
+device = torch.device('cpu')
+batch_size = args.batch_size
+max_acc = args.max_acc
+ckp = args.ckp
+weight_decay = args.weight_decay
+lr = args.lr
+num_epoch = args.num_epoch
+
+# ======================================= 加载数据集并处理 ======================================= #
+#读入训练集
+with open('./CoNLL2003_NER/mini_train.txt', encoding='utf-8') as ftrain_feature:
+    train_feature_line = [line.strip() for line in ftrain_feature.readlines()]
+with open('./CoNLL2003_NER/mini_train_label.txt', encoding='utf-8') as ftrain_label:
+    train_label_line = [line.strip() for line in ftrain_label.readlines()]
+#读入验证集
+with open('./CoNLL2003_NER/mini_test.txt', encoding='utf-8') as ftest_feature:
+    test_feature_line = [line.strip() for line in ftest_feature.readlines()]
+with open('./CoNLL2003_NER/mini_test_label.txt', encoding='utf-8') as ftest_label:
+    test_label_line = [line.strip() for line in ftest_label.readlines()]
+
+#转换大小写并用split分隔开存入列表
+train_feature_line = [line.lower().split(" ") for line in train_feature_line]
+train_label_line = [line.split(" ") for line in train_label_line]
+test_feature_line = [line.lower().split(" ") for line in test_feature_line]
+test_label_line = [line.split(" ") for line in test_label_line]
+
+#获得单词字典
+w2v_model = gensim.models.KeyedVectors.load_word2vec_format('./glove2word2vec.6B.50d.txt', binary=False, encoding='utf-8')
+word2id = dict(zip(w2v_model.wv.index2word,range(len(w2v_model.wv.index2word))))                              # word -> id
+id2word = {idx:word for idx,word in enumerate(w2v_model.wv.index2word)}                                       # id -> word
+unk = word2id['unk']              #UNK:低频词
+padding_value = word2id['pad']    #PAD:填充词
+#获得标签字典
+label2id = {'O': 0, 'B-LOC': 1, 'B-PER': 2, 'B-ORG': 3, 'I-PER': 4, 'I-ORG': 5, 'B-MISC': 6, 'I-LOC': 7, 'I-MISC': 8, '<START>': 9, '<STOP>': 10}
+#获得数据和标签序列
+train_feature = [[word2id[word] if word in word2id else unk for word in line] for line in train_feature_line]
+train_label = [[label2id[word] for word in line] for line in train_label_line]
+test_feature = [[word2id[word] if word in word2id else unk for word in line] for line in test_feature_line]
+test_label = [[label2id[word] for word in line] for line in test_label_line]
+
+#转成Tensor的形式
+train_feature = [torch.Tensor(line).long() for line in train_feature]
+train_label = [torch.Tensor(line).long() for line in train_label]
+test_feature = [torch.Tensor(line).long() for line in test_feature]
+test_label = [torch.Tensor(line).long() for line in test_label]
+
+
+def get_data(sample_features, sample_labels):
+    sample_data = []                                                    #为了能够将data放到DataLoader中
+    for i in range(len(sample_features)):
+        temp = []
+        temp.append(sample_features[i])
+        temp.append(sample_labels[i])
+        sample_data.append(temp)
+    return sample_data
+
+
+def collate_fn(sample_data):
+    sample_data.sort(key=lambda data: len(data[0]), reverse=True)                          #倒序排序
+    sample_features, sample_labels = [], []
+    for data in sample_data:
+        sample_features.append(data[0])
+        sample_labels.append(data[1])
+    data_length = [len(data[0]) for data in sample_data]                                   #取出所有data的长度
+    sample_features = torch.nn.utils.rnn.pad_sequence(sample_features, batch_first=True, padding_value=padding_value)
+    sample_labels = torch.nn.utils.rnn.pad_sequence(sample_labels, batch_first=True, padding_value=0)
+    return sample_features, sample_labels, data_length
+
+
+train_data = get_data(train_feature, train_label)
+test_data = get_data(test_feature, test_label)
+
+#处理非定长序列
+train_dataloader = torch.utils.data.DataLoader(train_data, batch_size, collate_fn=collate_fn, shuffle=True)
+test_dataloader = torch.utils.data.DataLoader(test_data, batch_size, collate_fn=collate_fn, shuffle=True)
+
+'''
+for epoch in range(args.num_epoch):
+    for data_x, data_y, batch_seq_len in train_dataloader:
+        print(data_x.shape)
+        print(data_y.shape)
+        print(batch_seq_len)
+        torch.Size([10, 37])
+        torch.Size([10, 37])
+        [37, 34, 34, 33, 32, 28, 26, 21, 11, 10]   这是把每一个的具体长度都输出了。
+'''
+
+# ======================================= 模型定义 ======================================= #
 def argmax(vec):
     # return the argmax as a python int
     # 返回vec的dim为1维度上的最大索引。
     _, idx = torch.max(vec, 1)
+    # 回忆一下max函数，返回的第一个是最大值的值，第二个是最大值所在的索引。
     return idx.item()
+
 
 def prepare_sequence(seq, to_ix):
     # 将句子转化为id。
-    # idxs = [to_ix[w] for w in seq]
-    idxs = [to_ix[word] if word in to_ix else unk for word in seq]
+    idxs = [to_ix[w] for w in seq]
     return torch.tensor(idxs, dtype=torch.long)
 
-# Compute log sum exp in a numerically stable way for the forward algorithm
 def log_sum_exp(vec):
+    # print(vec.shape)
+    # torch.Size([1, 5])
     max_score = vec[0, argmax(vec)]
+    # 不是分割，而是去取下标为0，argmax的最大值，   即max_score取出了vec中的最大值。
     max_score_broadcast = max_score.view(1, -1).expand(1, vec.size()[1])
-    return max_score + \
+    # expand 扩展成一样的，比如最大值如果是5，  则 tensor([[5, 5, 5, 5, 5]])
+    a = max_score + \
         torch.log(torch.sum(torch.exp(vec - max_score_broadcast)))
+    # print(a)  tensor(5.7115, grad_fn=<AddBackward0>)    是一个具体的数字。
+    return a
 
 class BiLSTM_CRF(nn.Module):
-    def __init__(self, vocab_size, tag_to_ix, embedding_dim, hidden_dim):
+    def __init__(self, embedding_matrix, vocab_size, hidden_dim, label2id):
         super(BiLSTM_CRF, self).__init__()
-        self.embedding_dim = embedding_dim  # word embedding dim
+        self.embedding_dim = hidden_dim  # word embedding dim
         self.hidden_dim = hidden_dim    # Bi-LSTM hidden dim
         self.vocab_size = vocab_size    # 字典中有多少字。
-        self.tag_to_ix = tag_to_ix      # tag转化为id。
-        self.tagset_size = len(tag_to_ix)   # 有多少tag。
+        self.label_size = len(label2id)
+        self.label2id = label2id
 
-        self.word_embeds = nn.Embedding(vocab_size, embedding_dim)
-        self.lstm = nn.LSTM(embedding_dim, hidden_dim // 2,
-                            num_layers=1, bidirectional=True)
+        # 词嵌入：
+        self.embedding = nn.Embedding(vocab_size, hidden_dim)
+        self.embedding.weight.data.copy_(torch.from_numpy(embedding_matrix))
+        self.embedding.weight.requires_grad = False
 
-        # Maps the output of the LSTM into tag space.
-        # 将BiLSTM提取的特征向量映射到特征空间， 即经过全连接得到发射分数。
-        self.hidden2tag = nn.Linear(hidden_dim, self.tagset_size)
+        # LSTM
+        self.lstm = nn.LSTM(hidden_dim, hidden_dim // 2, batch_first=True, num_layers=args.num_layers, bidirectional=True)
 
-        # Matrix of transition parameters.  Entry i,j is the score of
-        # transitioning *to* i *from* j.
-        # 转移矩阵的参数初始化，transitions【i，j]，代表的的是从第j个tag转移到第i个tag的转移分数。
-        self.transitions = nn.Parameter(
-            torch.randn(self.tagset_size, self.tagset_size))
-
-        # These two statements enforce the constraint that we never transfer
-        # to the start tag and we never transfer from the stop tag
-        self.transitions.data[tag_to_ix[START_TAG], :] = -10000
-        self.transitions.data[:, tag_to_ix[STOP_TAG]] = -10000
+        self.hidden2tag = nn.Linear(hidden_dim, self.label_size)
 
         self.hidden = self.init_hidden()
+
+        # CRF 的     这些是要训练的参数，为什么会训练这些呢？
+        self.transitions = nn.Parameter(torch.randn(self.label_size, self.label_size))
+        self.transitions.data[label2id[START_TAG], :] = -10000
+        self.transitions.data[:, label2id[STOP_TAG]] = -10000
 
     def init_hidden(self):
-        return (torch.randn(2, 1, self.hidden_dim // 2),
-                torch.randn(2, 1, self.hidden_dim // 2))
+        return (torch.randn(args.num_layers * 2, batch_size, self.hidden_dim // 2),
+                torch.randn(args.num_layers * 2, batch_size, self.hidden_dim // 2))
 
-    def _forward_alg(self, feats):
-        # Do the forward algorithm to compute the partition function
-        init_alphas = torch.full((1, self.tagset_size), -10000.)
-        # START_TAG has all of the score.
-        init_alphas[0][self.tag_to_ix[START_TAG]] = 0.
-
-        # Wrap in a variable so that we will get automatic backprop
-        forward_var = init_alphas
-
-        # Iterate through the sentence
-        for feat in feats:
-            alphas_t = []  # The forward tensors at this timestep
-            for next_tag in range(self.tagset_size):
-                # broadcast the emission score: it is the same regardless of
-                # the previous tag
-                emit_score = feat[next_tag].view(
-                    1, -1).expand(1, self.tagset_size)
-                # the ith entry of trans_score is the score of transitioning to
-                # next_tag from i
-                trans_score = self.transitions[next_tag].view(1, -1)
-                # The ith entry of next_tag_var is the value for the
-                # edge (i -> next_tag) before we do log-sum-exp
-                next_tag_var = forward_var + trans_score + emit_score
-                # The forward variable for this tag is log-sum-exp of all the
-                # scores.
-                alphas_t.append(log_sum_exp(next_tag_var).view(1))
-            forward_var = torch.cat(alphas_t).view(1, -1)
-        terminal_var = forward_var + self.transitions[self.tag_to_ix[STOP_TAG]]
-        alpha = log_sum_exp(terminal_var)
-        return alpha
-
-    def _get_lstm_features(self, sentence):
-        # 通过bi-LSTM提取特征。
+    def _get_lstm_features(self, inputs):
         self.hidden = self.init_hidden()
-        # 把词或字的序列转化为embedding的序列。
-        embeds = self.word_embeds(sentence).view(len(sentence), 1, -1)
-        lstm_out, self.hidden = self.lstm(embeds, self.hidden)
-        lstm_out = lstm_out.view(len(sentence), self.hidden_dim)
-        lstm_feats = self.hidden2tag(lstm_out)
-        return lstm_feats
+        # 输入 【10,40】   批量大小（句子的个数）为10，每个具体的句子中词的个数为40
+        out = self.embedding(inputs)  # [10, 40, 50]
+        out, self.hidden = self.lstm(out, self.hidden)  # torch.Size([10, 40, 50])
+        out = self.hidden2tag(out)  # torch.Size([10, 40, 11])
+        return out
 
     def _score_sentence(self, feats, tags):
-        # Gives the score of a provided tag sequence
-        # 计算给定tag序列的分数，即一条路径的分数。
-        score = torch.zeros(1)
-        tags = torch.cat([torch.tensor([self.tag_to_ix[START_TAG]], dtype=torch.long), tags])
-        for i, feat in enumerate(feats):
-            # 递推计算路径分数：转移分数+发射分数。
-            score = score + \
-                self.transitions[tags[i + 1], tags[i]] + feat[tags[i + 1]]
-        score = score + self.transitions[self.tag_to_ix[STOP_TAG], tags[-1]]
-        return score
+        # 计算给定tag序列（真实标记情况）的分数，
 
-    def _viterbi_decode(self, feats):
-        # 维比特算法解码。
-        backpointers = []
+        # feats  发射分数   ：直接从BILSTM的结果过来。[10, 40, 11]
+        # tags   真实的标签 ： [10, 40]
+        # 标签的开头加上start_tag
+        tags = torch.cat((torch.tensor([[self.label2id[START_TAG]]] * batch_size, dtype=torch.long), tags), dim=1)
 
-        # Initialize the viterbi variables in log space
-        init_vvars = torch.full((1, self.tagset_size), -10000.)
-        init_vvars[0][self.tag_to_ix[START_TAG]] = 0
+        # 第一个tag 不涉及 发射分数。
+        scores = []
+        for j, feats2 in enumerate(feats):
+            score = 0.0
+            for i, feat in enumerate(feats2):
+                score = score + feat[tags[j][i + 1]] + self.transitions[tags[j][i + 1], tags[j][i]]
+            score = score + self.transitions[self.label2id[STOP_TAG], tags[j][-1]]
+            scores.append(score.item())
+        scores = torch.tensor(scores)
+        # print(scores.shape)  torch.Size([10])     批量中每个句子的分数。
+        return scores
 
-        # forward_var at step i holds the viterbi variables for step i-1
-        forward_var = init_vvars
-        for feat in feats:
-            bptrs_t = []  # holds the backpointers for this step
-            viterbivars_t = []  # holds the viterbi variables for this step
+    def _forward_alg(self, feats2):
+        # 通过前向算法计算所有可能路径的分数总和。
+        alphas = []
+        for feats in feats2:
+            init_alphas = torch.full((1, self.label_size), -10000.)
+            init_alphas[0][self.label2id[START_TAG]] = 0.
 
-            for next_tag in range(self.tagset_size):
-                # next_tag_var[i] holds the viterbi variable for tag i at the
-                # previous step, plus the score of transitioning
-                # from tag i to next_tag.
-                # We don't include the emission scores here because the max
-                # does not depend on them (we add them in below)
-                next_tag_var = forward_var + self.transitions[next_tag]
-                best_tag_id = argmax(next_tag_var)
-                bptrs_t.append(best_tag_id)
-                viterbivars_t.append(next_tag_var[0][best_tag_id].view(1))
-            # Now add in the emission scores, and assign forward_var to the set
-            # of viterbi variables we just computed
-            forward_var = (torch.cat(viterbivars_t) + feat).view(1, -1)
-            backpointers.append(bptrs_t)
+            forward_var = init_alphas
 
-        # Transition to STOP_TAG
-        terminal_var = forward_var + self.transitions[self.tag_to_ix[STOP_TAG]]
-        best_tag_id = argmax(terminal_var)
-        path_score = terminal_var[0][best_tag_id]
-
-        # Follow the back pointers to decode the best path.
-        best_path = [best_tag_id]
-        for bptrs_t in reversed(backpointers):
-            best_tag_id = bptrs_t[best_tag_id]
-            best_path.append(best_tag_id)
-        # Pop off the start tag (we dont want to return that to the caller)
-        start = best_path.pop()
-        assert start == self.tag_to_ix[START_TAG]  # Sanity check
-        best_path.reverse()
-        return path_score, best_path
+            for feat in feats:
+                alphas_t = []  # The forward tensors at this timestep
+                for next_tag in range(self.label_size):
+                    emit_score = feat[next_tag].view(
+                        1, -1).expand(1, self.label_size)
+                    trans_score = self.transitions[next_tag].view(1, -1)
+                    next_tag_var = forward_var + trans_score + emit_score
+                    alphas_t.append(log_sum_exp(next_tag_var).view(1))
+                forward_var = torch.cat(alphas_t).view(1, -1)
+            terminal_var = forward_var + self.transitions[self.label2id[STOP_TAG]]
+            alpha = log_sum_exp(terminal_var)
+            alphas.append(alpha)
+        alphas = torch.tensor(alphas)
+        # print(alphas.shape)  torch.Size([10])
+        return alphas
 
     def neg_log_likelihood(self, sentence, tags):
-        # crf损失函数。
+        # crf损失函数。    需要真实路径的分数 和 所有路径的总分数。
+        # 真实路径的分数应该是所有路径中分数最高的。
+        # -[ log（ 真实路径的分数 ）/ log（ 所有可能路径的分数 ）]
         feats = self._get_lstm_features(sentence)
-        forward_score = self._forward_alg(feats)
-        gold_score = self._score_sentence(feats, tags)
-        return forward_score - gold_score
+        forward_score = self._forward_alg(feats)  # 通过前向算法计算所有可能路径的分数总和。
+        gold_score = self._score_sentence(feats, tags)  # 计算给定的该标签的可能的分数。
+        return torch.sum(forward_score - gold_score, dim=0)/10
 
-    def forward(self, sentence):  # dont confuse this with _forward_alg above.
-        # Get the emission scores from the BiLSTM
-        lstm_feats = self._get_lstm_features(sentence)
+    def forward(self, inputs, tags):
+        feats = self._get_lstm_features(inputs)
 
-        # Find the best path, given the features.
-        score, tag_seq = self._viterbi_decode(lstm_feats)
-        return score, tag_seq
+        return a
 
-# ------------------------------------------------------ 变量初始化，文本预处理。 ---------------------------------------
+
 START_TAG = "<START>"
 STOP_TAG = "<STOP>"
-EMBEDDING_DIM = 50
-HIDDEN_DIM = 40
+tag_num = 10
 
-# Make up some training data
-with open('./CoNLL2003_NER/train/seq.in', encoding='utf-8') as ftrain_feature:
-    train_feature_line = [line.strip() for line in ftrain_feature.readlines()]
-with open('./CoNLL2003_NER/train/seq.out', encoding='utf-8') as ftrain_label:
-    train_label_line = [line.strip() for line in ftrain_label.readlines()]
-train_feature_line = [line.lower().split(" ") for line in train_feature_line]
-train_label_line = [line.split(" ") for line in train_label_line]   # 当前形式：【 【每一个句子中的单次的列表】， 【】， 【】 】
-w2v_model = gensim.models.KeyedVectors.load_word2vec_format('glove.6B.50d.txt', binary=False, encoding='utf-8')
-word_to_ix = dict(zip(w2v_model.wv.index2word, range(len(w2v_model.wv.index2word))))  # word -> id
-id2word = {idx: word for idx, word in enumerate(w2v_model.wv.index2word)}  # id -> word
-word_to_ix['[UNK]'] = 400000
-unk = word_to_ix['[UNK]']  # UNK:低频词
-word_to_ix['[PAD]'] = 400001
-padding_value = word_to_ix['[PAD]']  # PAD:填充词
+embedding_matrix = w2v_model.wv.vectors
+model = BiLSTM_CRF(embedding_matrix, embedding_matrix.shape[0], embedding_matrix.shape[1], label2id)
+# 词向量矩阵， 词的数量，词向量的深度，label2id
 
-# 获得标签字典
-tag_to_ix = {'O': 0, 'B-LOC': 1, 'B-PER': 2, 'B-ORG': 3, 'I-PER': 4, 'I-ORG': 5, 'B-MISC': 6, 'I-LOC': 7, 'I-MISC': 8,
-            START_TAG: 9, STOP_TAG: 10}
-
-'''
-pytorch 所给的：
-training_data = [(
-    "the wall street journal reported today that apple corporation made money".split(),
-    "B I I I O O O B I O O".split()
-), (
-    "georgia tech is a university in georgia".split(),
-    "B I O O O O B".split()
-)]
-
-word_to_ix = {}
-for sentence, tags in training_data:
-    # print(sentence, tags) sentence和tags中存放的分别是   单词组成的列表    和     标注序列组成的列表。
-    for word in sentence:
-        if word not in word_to_ix:
-            word_to_ix[word] = len(word_to_ix)
-# print(word_to_ix)
-# word_to_ix中存放的是，每一个单词以及单词对应的id。
-tag_to_ix = {"B": 0, "I": 1, "O": 2, START_TAG: 3, STOP_TAG: 4}
-'''
-
-model = BiLSTM_CRF(len(word_to_ix), tag_to_ix, EMBEDDING_DIM, HIDDEN_DIM)
-# 字典中有多少字，tag转化为id的变量，词向量的维度，隐藏层的维度。
 optimizer = optim.SGD(model.parameters(), lr=0.01, weight_decay=1e-4)
-
-'''
-# Check predictions before training
-with torch.no_grad():
-    precheck_sent = prepare_sequence(training_data[0][0], word_to_ix)
-    precheck_tags = torch.tensor([tag_to_ix[t] for t in training_data[0][1]], dtype=torch.long)
-    print(model(precheck_sent))
-'''
-# ------------------------------------------------------ 训练 ---------------------------------------
-training_data=list(zip(train_feature_line, train_label_line))
-# Make sure prepare_sequence from earlier in the LSTM section is loaded
-for epoch in range(300):
-    # again, normally you would NOT do 300 epochs, it is toy data
-    for sentence, tags in training_data:
-        # Step 1. Remember that Pytorch accumulates gradients.
-        # We need to clear them out before each instance
+for epoch in range(args.num_epoch):
+    for data_x, data_y, batch_seq_len in train_dataloader:
         model.zero_grad()
-
-        # Step 2. Get our inputs ready for the network, that is,
-        # turn them into Tensors of word indices.
-        sentence_in = prepare_sequence(sentence, word_to_ix)
-        targets = torch.tensor([tag_to_ix[t] for t in tags], dtype=torch.long)
-
-        # Step 3. Run our forward pass.
-        loss = model.neg_log_likelihood(sentence_in, targets)
-
-        # Step 4. Compute the loss, gradients, and update the parameters by
-        # calling optimizer.step()
+        loss = model.neg_log_likelihood(data_x, data_y)
+        print('epoch %d, train_loss %f' % (
+            epoch + 1, loss))
+        loss.requires_grad_(True)
         loss.backward()
         optimizer.step()
-
-# print(training_data)
-# [(['the', 'wall', 'street', 'journal', 'reported', 'today', 'that', 'apple', 'corporation', 'made', 'money'],
-#   ['B', 'I', 'I', 'I', 'O', 'O', 'O', 'B', 'I', 'O', 'O']),
-#  (['georgia', 'tech', 'is', 'a', 'university', 'in', 'georgia'],
-#   ['B', 'I', 'O', 'O', 'O', 'O', 'B'])
-# ]
-# Check predictions after training
-with torch.no_grad():
-    precheck_sent = prepare_sequence(training_data[1][0], word_to_ix)
-    print(precheck_sent)
-    print(model(precheck_sent))
-# We got it!
-
-# ------------------------------------------------------ 测试 ---------------------------------------
-# 训练代码没有运行完成，下面写的也不知道对吗？
-# classification_report函数的参数貌似只能是一维的。
-# 读取测试集。
-with open('./CoNLL2003_NER/test/seq.in', encoding='utf-8') as ftest_feature:
-    test_feature_line = [line.strip() for line in ftest_feature.readlines()]
-with open('./CoNLL2003_NER/test/seq.out', encoding='utf-8') as ftest_label:
-    test_label_line = [line.strip() for line in ftest_label.readlines()]
-test_feature_line = [line.lower().split(" ") for line in test_feature_line]
-test_label_line = [line.split(" ") for line in test_label_line]
-test_feature = [[word_to_ix[word] if word in word_to_ix else unk for word in line] for line in test_feature_line]
-test_label = [[tag_to_ix[word] for word in line] for line in test_label_line]
-# a: 存放计算的。
-a = []
-# b：存放原来标准的。
-b = []
-# 计算a：
-for x in test_feature:
-    with torch.no_grad():
-        a = a+model(x)[1]
-# 计算b：
-b = _flatten(test_label)
-print(classification_report(a, b))
-
