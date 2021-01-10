@@ -7,7 +7,7 @@ lower 和 Tokenizer把符号分开。
 label处理：- 认为作为无关（neutral）的处理比较合理，
 ### 模型：
 在模型搭建时，linear，bilstm等中都设置了，
-自己测试原始模型：\n
+自己测试原始模型：
 test_accuracy 0.896800  dev_accuracy 0.895100
 
 尝试再增加一个卷积核，结果基本没有提升。（结果未保存）
