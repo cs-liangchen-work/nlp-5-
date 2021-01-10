@@ -15,6 +15,7 @@ tree-LSTM 感觉写不出来，直接放弃了。
 
 使用mask机制，
 test_accuracy 0.846100    dev_accuracy 0.855100
+
 未使用mask机制：
 test_accuracy 0.846700    dev_accuracy 0.859300
 
